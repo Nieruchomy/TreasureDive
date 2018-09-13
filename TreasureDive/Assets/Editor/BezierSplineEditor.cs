@@ -10,13 +10,6 @@ public class BezierSplineEditor : Editor
     Quaternion splineRotation;
 
     int selectedIndex = -1;
-    float buttonSize = 0.1f;
-
-    private static Color[] modeColors = {
-        Color.white,
-        Color.yellow,
-        Color.cyan
-    };
 
     void OnEnable()
     {
@@ -28,83 +21,141 @@ public class BezierSplineEditor : Editor
         splineRotation = spline.transform.rotation;
     }
 
-    public override void OnInspectorGUI()
-    {
-        EditorGUI.BeginChangeCheck();
-        bool isClosed = EditorGUILayout.Toggle("Loop", path.IsClosed);
-        if (EditorGUI.EndChangeCheck())
-        {
-            Undo.RecordObject(spline, "Toggle Loop");
-            EditorUtility.SetDirty(spline);
-            path.IsClosed = isClosed;
-        }
-
-        if (selectedIndex >= 0 && selectedIndex < path.PointCount)
-        {
-            DrawSelectedPointInspector();
-        }
-
-        if (GUILayout.Button("Add Segment"))
-        {
-            Undo.RecordObject(spline, "Segment");
-            EditorUtility.SetDirty(spline);
-            path.AddSegment();
-        }
-    }
-
     void OnSceneGUI()
     {
-        Vector3 p0 = SetPoint(0);
-        for (int i = 1; i < path.PointCount; i += 3)
-        {
-            Vector3 p1 = SetPoint(i);
-            Vector3 p2 = SetPoint(i + 1);
-            Vector3 p3 = SetPoint(i + 2);
-            DrawSpline(p0, p1, p2, p3);
-            p0 = p3;
-        }
-
+        Input();
+        Draw();
     }
 
-    Vector3 SetPoint(int index)
+    void Input()
+    {
+        Event guiEvent = Event.current;
+        Vector2 mousePos = HandleUtility.GUIPointToScreenPixelCoordinate(guiEvent.mousePosition);
+
+        if(guiEvent.type == EventType.MouseDown && guiEvent.button == 1)
+        {
+            float minDstToAnchor = 10f; // TODO: make inspector
+            int closestAnchorIndex = -1;
+
+            for (int i = 0; i < path.PointCount; i += 3)
+            {  
+                float dst = Vector2.Distance(mousePos, Camera.current.WorldToScreenPoint(splineTransform.TransformPoint(path[i])));
+                if(dst < minDstToAnchor)
+                {
+                    minDstToAnchor = dst;
+                    closestAnchorIndex = i;
+                }
+            }
+            if (closestAnchorIndex != -1)
+            {
+                Undo.RecordObject(spline, "Delete Segment");
+                path.DeleteSegment(closestAnchorIndex);
+            }
+        }
+
+        //HandleUtility.AddDefaultControl(0);
+    }
+
+    void Draw()
+    {
+        /*********** DRAW CURVES **********/
+        for (int i = 0; i < path.SegmentCount; i++)
+        {
+            Vector3[] points = path.GetPointsInSegment(i);
+            Handles.color = Color.grey;
+
+            //TODO: clean up this
+            Vector3 p0 = splineTransform.TransformPoint(points[0]);
+            Vector3 p1 = splineTransform.TransformPoint(points[1]);
+            Vector3 p2 = splineTransform.TransformPoint(points[2]);
+            Vector3 p3 = splineTransform.TransformPoint(points[3]);
+
+            Handles.DrawLine(p1, p0);
+            Handles.DrawLine(p2, p3); 
+            Handles.DrawBezier(p0, p3, p1, p2, spline.splineColor, null, 2);
+        }
+
+        /*********** DRAW HANDLES **********/
+        for (int i = 0; i < path.PointCount; i++)
+        {
+            DrawPoint(i);
+        }
+    }
+
+    void DrawPoint(int index)
     {
         Vector3 pointWorldPos = splineTransform.TransformPoint(path[index]);
 
-        Handles.color = modeColors[(int)path.GetPointModeAt(index)];
-        if (Handles.Button(pointWorldPos, splineRotation, buttonSize, buttonSize * 2, Handles.DotHandleCap))
+        Handles.color = Color.red;
+
+        EditorGUI.BeginChangeCheck(); // start check
+
+        Vector3 newPosition = Handles.FreeMoveHandle(pointWorldPos, splineRotation, .1f, Vector3.zero, Handles.DotHandleCap);
+
+        if (EditorGUI.EndChangeCheck()) // end check 
         {
             selectedIndex = index;
+            path.MovePoint(index, splineTransform.InverseTransformPoint(newPosition));
+            Undo.RecordObject(spline, "Move Point");
+            EditorUtility.SetDirty(spline);
             Repaint();
-        }
-
-        if (selectedIndex == index)
-        {
-            EditorGUI.BeginChangeCheck(); // start check
-
-            pointWorldPos = Handles.DoPositionHandle(pointWorldPos, splineRotation);
-
-            if (EditorGUI.EndChangeCheck()) // end check 
-            {
-                Undo.RecordObject(spline, "Move Point");
-                EditorUtility.SetDirty(spline);
-                path.SetControlPoint(index, splineTransform.InverseTransformPoint(pointWorldPos));
-            }
         }
 
         //Set label with basic info
         Handles.Label(splineTransform.TransformPoint(path[index]) + (Vector3.up * 0.5f) + (Vector3.left * 1.5f),
                       path[index].ToString() + "\n Index: " + index);
-
-        return pointWorldPos;
     }
 
-    void DrawSpline(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3)
+    public override void OnInspectorGUI()
     {
-        Handles.color = Color.grey;
-        Handles.DrawLine(p0, p1);
-        Handles.DrawLine(p2, p3);
+        base.DrawDefaultInspector();
+        EditorGUI.BeginChangeCheck();
 
-        Handles.DrawBezier(p0, p3, p1, p2, Color.black, null, 2f);
+        /*********** DISPLAY CURRENT POINT POS **********/
+        if (selectedIndex >= 0 && selectedIndex < path.PointCount)
+        {
+            DrawSelectedPointInspector();
+        }
+
+        /*********** Create New **********/
+        if (GUILayout.Button("Create New"))
+        {
+            Undo.RecordObject(spline, "Create New");
+            EditorUtility.SetDirty(spline);
+            spline.CreatePath();
+            path = spline.path;
+        }
+
+        /*********** BUTTON ADD SEGMENT **********/
+        if (GUILayout.Button("Add Segment"))
+        {
+            Undo.RecordObject(spline, "Add Segment");
+            EditorUtility.SetDirty(spline);
+            path.AddSegment();
+        }
+
+        /*********** TOGGLE CLOSED **********/
+        bool isClosed = GUILayout.Toggle(path.IsClosed, "Closed");
+        if (isClosed != path.IsClosed)
+        {
+            Undo.RecordObject(spline, "Toggle Closed");
+            EditorUtility.SetDirty(spline);
+            path.IsClosed = isClosed;
+        }
+
+        /*********** TOGGLE AUTOSET **********/
+       
+        bool isAutoSet = GUILayout.Toggle(path.AutoSetPoints, "Auto Set Points");
+        if(path.AutoSetPoints != isAutoSet)
+        {
+            Undo.RecordObject(spline, "Toggle AutoSet");
+            EditorUtility.SetDirty(spline);
+            path.AutoSetPoints = isAutoSet;
+        }
+        if(EditorGUI.EndChangeCheck())
+        {
+            SceneView.RepaintAll();
+        }
     }
 
     void DrawSelectedPointInspector()
@@ -118,21 +169,7 @@ public class BezierSplineEditor : Editor
         {
             Undo.RecordObject(spline, "Move Point");
             EditorUtility.SetDirty(spline);
-            path.SetControlPoint(selectedIndex,point);
+            path.MovePoint(selectedIndex,point);
         }
-
-        EditorGUI.BeginChangeCheck();
-
-        BezierPointMode mode =
-            (BezierPointMode)EditorGUILayout.EnumPopup("Mode", path.GetPointModeAt(selectedIndex));
-
-        if(EditorGUI.EndChangeCheck())
-        {
-            Undo.RecordObject(spline, "MChange Mode");
-            EditorUtility.SetDirty(spline);
-            path.SetPointModeAt(selectedIndex, mode);
-        }
-
-
     }
 }
